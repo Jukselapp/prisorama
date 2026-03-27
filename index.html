@@ -1073,6 +1073,12 @@ function renderTable() {
         if (p.type === 'select') {
           let opts = (p.options || []).map(o => `<option value="${esc(o)}" ${o===val?'selected':''}>${esc(o)}</option>`).join('');
           bh += `<td><select class="cell-input" onchange="updateObjValue('${obj.id}','${p.key}',this.value)"><option value="">—</option>${opts}</select></td>`;
+        } else if (p.type === 'number' && p.thousandSep && val !== '') {
+          const dispVal = !isNaN(parseFloat(val)) ? Number(val).toLocaleString('nb-NO') : esc(String(val));
+          bh += `<td><input class="cell-input" type="text" value="${dispVal}"
+            onfocus="this.value='${esc(String(val))}'"
+            onblur="const n=parseFloat(this.value.replace(/[\\s]/g,'').replace(',','.')); if(!isNaN(n)){this.value=n.toLocaleString('nb-NO');}"
+            onchange="updateObjValue('${obj.id}','${p.key}',this.value)"></td>`;
         } else {
           bh += `<td><input class="cell-input" type="${p.type==='number'?'number':'text'}" value="${esc(String(val))}" ${p.type==='number'?'step="any"':''} onchange="updateObjValue('${obj.id}','${p.key}',this.value)"></td>`;
         }
@@ -1138,7 +1144,8 @@ function updateObjValue(id, key, val) {
   const p = project.parameters.find(p => p.key === key);
   pushHistory();
   if (p && p.type === 'number') {
-    o.values[key] = (val === '' ? '' : parseFloat(val));
+    const cleaned = typeof val === 'string' ? val.replace(/\s/g, '').replace(',', '.') : val;
+    o.values[key] = (cleaned === '' ? '' : parseFloat(cleaned));
   } else if (p && p.type === 'boolean') {
     o.values[key] = (val === true || val === 'true');
   } else {
@@ -2423,13 +2430,15 @@ function renderKpi() {
   const p = project.parameters.find(pp => pp.key === project.kpi.paramKey);
   const val = computeKpiValue();
   const label = project.kpi.label || (p ? p.label : '');
-  const dispVal = val !== null ? formatNum(parseFloat(val.toFixed(4)), p) : '–';
+  const kpiSep = project.kpi.thousandSep || (p && p.thousandSep);
+  const fmtParam = kpiSep ? { thousandSep: true, type: 'number' } : p;
+  const dispVal = val !== null ? formatNum(parseFloat(val.toFixed(4)), fmtParam) : '–';
   el.textContent = label + ': ' + dispVal + (p && p.unit ? ' ' + p.unit : '');
 }
 
 function openKpiConfig() {
   const numParams = project.parameters.filter(p => p.type === 'number' || p.type === 'formula');
-  const cur = project.kpi || { paramKey: '', func: 'sum', label: '' };
+  const cur = project.kpi || { paramKey: '', func: 'sum', label: '', thousandSep: false };
   const html = `<div class="modal-body">
     <div class="form-group"><label>Parameter</label>
       <select id="kpiParamKey">
@@ -2449,13 +2458,20 @@ function openKpiConfig() {
     <div class="form-group"><label>Egendefinert etikett (valgfritt)</label>
       <input id="kpiLabel" value="${esc(cur.label||'')}" placeholder="La stå tomt for å bruke parameternavn">
     </div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="kpiThousandSep" ${cur.thousandSep?'checked':''}>
+        <span>Tusenskille (f.eks. 1 250 000)</span>
+      </label>
+    </div>
   </div>`;
   showModal('Nøkkeltall (KPI)', html, [
     {label:'Lagre', cls:'btn-primary', action: () => {
       project.kpi = {
         paramKey: document.getElementById('kpiParamKey').value,
         func: document.getElementById('kpiFunc').value,
-        label: document.getElementById('kpiLabel').value.trim()
+        label: document.getElementById('kpiLabel').value.trim(),
+        thousandSep: document.getElementById('kpiThousandSep').checked
       };
       autoSave(); renderKpi(); closeModal();
     }},
@@ -2714,15 +2730,20 @@ function renderActionFilterList() {
   const opOpts = `<option value="=">=</option><option value="≠">≠</option><option value=">">&gt;</option><option value="<">&lt;</option><option value="≥">≥</option><option value="≤">≤</option><option value="inneholder">inneholder</option>`;
   if (!actionFilters.length) { container.innerHTML = ''; return; }
   container.innerHTML = actionFilters.map((f, i) => `
-    <div style="display:flex;gap:4px;margin-bottom:4px;align-items:center;">
-      <select style="flex:1.3;" onchange="setActionFilter(${i},'paramKey',this.value)">${
-        allParams.map(p => `<option value="${p.key}" ${p.key===f.paramKey?'selected':''}>${esc(p.label)}</option>`).join('')
-      }<option value="" ${f.paramKey===''?'selected':''}>— Parameter —</option></select>
-      <select style="flex:0.9;" onchange="setActionFilter(${i},'op',this.value)">
-        ${['=','≠','>','<','≥','≤','inneholder'].map(o=>`<option value="${o}" ${f.op===o?'selected':''}>${o}</option>`).join('')}
-      </select>
-      <input type="text" style="flex:1;" value="${esc(f.value)}" placeholder="Verdi…" oninput="setActionFilter(${i},'value',this.value)">
-      <button class="btn btn-ghost btn-sm" onclick="removeActionFilter(${i})" style="color:var(--red);padding:4px 6px;">×</button>
+    <div style="background:var(--bg-gray);border-radius:var(--radius-sm);padding:7px 8px;margin-bottom:6px;">
+      <div style="display:flex;gap:4px;margin-bottom:4px;align-items:center;">
+        <select style="flex:1;min-width:0;font-size:12px;" onchange="setActionFilter(${i},'paramKey',this.value)">
+          <option value="" ${f.paramKey===''?'selected':''}>— Parameter —</option>
+          ${allParams.map(p => `<option value="${p.key}" ${p.key===f.paramKey?'selected':''}>${esc(p.label)}</option>`).join('')}
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="removeActionFilter(${i})" style="color:var(--red);padding:2px 6px;flex-shrink:0;">×</button>
+      </div>
+      <div style="display:flex;gap:4px;align-items:center;">
+        <select style="width:90px;flex-shrink:0;font-size:12px;" onchange="setActionFilter(${i},'op',this.value)">
+          ${['=','≠','>','<','≥','≤','inneholder'].map(o=>`<option value="${o}" ${f.op===o?'selected':''}>${o}</option>`).join('')}
+        </select>
+        <input type="text" style="flex:1;min-width:0;font-size:12px;" value="${esc(f.value)}" placeholder="Verdi…" oninput="setActionFilter(${i},'value',this.value)">
+      </div>
     </div>`).join('');
 }
 
