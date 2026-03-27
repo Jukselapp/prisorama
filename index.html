@@ -475,7 +475,7 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 4px; paddi
         <select id="tableViewSelect" onchange="applyTableView(this.value)" style="font-size:12px;padding:5px 8px;"><option value="">Alle kolonner</option></select>
         <button class="btn btn-ghost btn-sm" onclick="openTableViewManager()" title="Administrer kolonneutvalg">&#9881;</button>
         <div style="flex:1;"></div>
-        <input type="text" class="search-input" placeholder="Søk i navn..." id="tableSearch" oninput="renderTable()">
+        <input type="text" class="search-input" placeholder="Søk i navn..." id="tableSearch" oninput="debouncedRenderTable()">
         <button class="btn btn-ghost btn-sm" onclick="exportCSV()">
           <span class="ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 14l4 4 4-4"/><line x1="10" y1="18" x2="10" y2="8"/><line x1="3" y1="4" x2="17" y2="4"/></svg></span> CSV
         </button>
@@ -1139,6 +1139,12 @@ function renderTable() {
   tbody.innerHTML = bh;
 }
 
+let _renderTableTimer = null;
+function debouncedRenderTable() {
+  clearTimeout(_renderTableTimer);
+  _renderTableTimer = setTimeout(renderTable, 150);
+}
+
 function setSort(c) { if(sortCol===c) sortDir*=-1; else {sortCol=c;sortDir=1;} renderTable(); }
 
 /* Column drag-and-drop reorder */
@@ -1201,7 +1207,7 @@ function updateObjValue(id, key, val) {
   } else {
     o.values[key] = val;
   }
-  autoSave(); renderOverlays(); updateDetailPanel(); renderTable();
+  autoSave(); renderOverlays(); updateDetailPanel(); debouncedRenderTable();
 }
 
 /* ============================================================
