@@ -448,6 +448,7 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 4px; paddi
         <span class="ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14 6l-4-4-4 4"/><line x1="10" y1="2" x2="10" y2="12"/><path d="M17 10v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6"/></svg></span> Importer
       </button>
       <span id="autoSaveIndicator" style="font-size:11px;color:var(--text-muted);">Lagret</span>
+      <button class="btn btn-ghost btn-sm" onclick="openHelp()" title="Bruksanvisning">?</button>
     </div>
   </div>
 
@@ -635,23 +636,8 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 4px; paddi
           </select>
         </div>
         <h3>Filtrer (valgfritt)</h3>
-        <div class="form-row" style="margin-bottom:6px;">
-          <select id="actionFilterParam" onchange="updateActionPreview()" style="flex:1.2;">
-            <option value="">Ingen filter</option>
-          </select>
-          <select id="actionFilterOp" onchange="updateActionPreview()" style="flex:0.8;">
-            <option value="=">=</option>
-            <option value="≠">≠</option>
-            <option value=">">&gt;</option>
-            <option value="<">&lt;</option>
-            <option value="≥">≥</option>
-            <option value="≤">≤</option>
-            <option value="inneholder">inneholder</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <input type="text" id="actionFilterValue" placeholder="Filterverdi..." oninput="updateActionPreview()">
-        </div>
+        <div id="actionFilterList"></div>
+        <button class="btn btn-ghost btn-sm" onclick="addActionFilter()" style="margin-top:4px;">+ Legg til filter</button>
         <h3>Operasjon</h3>
         <div class="form-group">
           <select id="actionType" onchange="updateActionPreview()">
@@ -698,6 +684,19 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 4px; paddi
           <select id="reportCalc" onchange="runReport()">
             <option value="count">Antall</option><option value="sum">Sum</option>
             <option value="avg">Gjennomsnitt</option><option value="min">Min</option><option value="max">Maks</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Sammenlign</label>
+          <select id="reportScenarioA" onchange="runReport()">
+            <option value="current">Nåværende</option>
+          </select>
+        </div>
+        <div class="field" id="reportScenarioBField">
+          <label>mot</label>
+          <select id="reportScenarioB" onchange="runReport()">
+            <option value="none">— Ingen —</option>
+            <option value="current">Nåværende</option>
           </select>
         </div>
         <button class="btn btn-primary btn-sm" onclick="runReport()">Kjør rapport</button>
@@ -796,6 +795,19 @@ function formatNum(val, p) {
   }
   return String(val);
 }
+function exportFilename(ext) {
+  const name = (project.metadata.name || 'prosjekt')
+    .replace(/[^a-zA-Z0-9æøåÆØÅ]/g, '_')
+    .replace(/_+/g, '_').replace(/^_|_$/g, '');
+  const now = new Date();
+  const d = now.getFullYear().toString()
+    + String(now.getMonth()+1).padStart(2,'0')
+    + String(now.getDate()).padStart(2,'0');
+  const t = String(now.getHours()).padStart(2,'0')
+    + String(now.getMinutes()).padStart(2,'0');
+  return `prisorama_${name}_${d}_${t}.${ext}`;
+}
+
 function toast(msg, type='info') {
   const el=document.createElement('div'); el.className='toast'+(type==='error'?' error':type==='warning'?' warning':'');
   el.textContent=msg; document.getElementById('toastContainer').appendChild(el);
@@ -946,8 +958,8 @@ function switchTab(tab) {
   document.getElementById('view-'+tab).classList.add('active');
   if(tab==='table') { renderTable(); renderFilterBar(); renderAggregationBar(); renderTableViewSelect(); }
   if(tab==='graphic') { initGraphicView(); }
-  if(tab==='report') initReportView();
-  if(tab==='actions') initActionsView();
+  if(tab==='report') { initReportView(); runReport(); }
+  if(tab==='actions') { initActionsView(); renderActionFilterList(); }
 }
 
 /* ============================================================
@@ -1418,7 +1430,7 @@ function closeModal() { const el = document.getElementById('modalBackdrop'); if 
    IMPORT / EXPORT
    ============================================================ */
 function exportProjectJSON() {
-  downloadFile(JSON.stringify(project, null, 2), (project.metadata.name || 'prosjekt') + '.json', 'application/json');
+  downloadFile(JSON.stringify(project, null, 2), exportFilename('json'), 'application/json');
   toast('Prosjekt eksportert som JSON.');
 }
 function importProjectJSON() { document.getElementById('fileInputJSON').click(); }
@@ -1450,7 +1462,7 @@ function exportCSV() {
       return csvE(String(o.values[p.key] ?? ''));
     })].join(sep));
   }
-  downloadFile(lines.join('\n'), 'objekter.csv', 'text/csv;charset=utf-8');
+  downloadFile(lines.join('\n'), exportFilename('csv'), 'text/csv;charset=utf-8');
   toast('CSV eksportert.');
 }
 function csvE(v) { v = String(v); return (v.includes(';') || v.includes('"') || v.includes('\n')) ? '"' + v.replace(/"/g, '""') + '"' : v; }
@@ -2197,30 +2209,42 @@ function initReportView() {
   ms.innerHTML = '<option value="">— Velg —</option>' + project.parameters
     .filter(p => p.type === 'number' || p.type === 'formula')
     .map(p => `<option value="${p.key}" ${p.key===cm?'selected':''}>${esc(p.label)}${p.unit?' ('+esc(p.unit)+')':''}</option>`).join('');
+
+  // Populate scenario selects
+  const snaps = project.snapshots || [];
+  const snapOpts = snaps.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  const sa = document.getElementById('reportScenarioA');
+  const sb = document.getElementById('reportScenarioB');
+  if (sa) {
+    const curA = sa.value;
+    sa.innerHTML = `<option value="current">Nåværende</option>${snapOpts}`;
+    if (curA && [...sa.options].some(o => o.value === curA)) sa.value = curA;
+  }
+  if (sb) {
+    const curB = sb.value;
+    sb.innerHTML = `<option value="none">— Ingen —</option><option value="current">Nåværende</option>${snapOpts}`;
+    if (curB && [...sb.options].some(o => o.value === curB)) sb.value = curB;
+  }
 }
 
-function runReport() {
-  const gk = document.getElementById('reportGroupBy').value;
-  const mk = document.getElementById('reportMeasure').value;
-  const calc = document.getElementById('reportCalc').value;
-  const c = document.getElementById('reportResults');
-  if (!mk && calc !== 'count') { c.innerHTML = '<div class="empty-state"><div>Velg en måleparameter.</div></div>'; return; }
-  const mp = project.parameters.find(p => p.key === mk);
-  const gp = project.parameters.find(p => p.key === gk);
+function getScenarioObjects(scenarioId) {
+  if (scenarioId === 'current') return project.objects;
+  const snap = (project.snapshots||[]).find(s=>s.id===scenarioId);
+  if (!snap) return project.objects;
+  try { return JSON.parse(snap.state).objects || []; } catch { return []; }
+}
+
+function computeReportGroups(objects, gk, mk, calc) {
   const groups = {};
-  for (const obj of project.objects) {
+  for (const obj of objects) {
     let g;
     if (gk) {
       const gpPrm = project.parameters.find(p => p.key === gk);
       const rawG = obj.values[gk];
       if (gpPrm && gpPrm.type === 'boolean') {
         g = (rawG === true || rawG === 'true' || rawG === 'ja') ? 'Ja' : 'Nei';
-      } else {
-        g = rawG || '(tom)';
-      }
-    } else {
-      g = 'Alle';
-    }
+      } else { g = rawG || '(tom)'; }
+    } else { g = 'Alle'; }
     if (!groups[g]) groups[g] = [];
     groups[g].push(obj);
   }
@@ -2233,16 +2257,76 @@ function runReport() {
     let r;
     switch(calc) {
       case 'count': r = objs.length; break;
-      case 'sum': r = vals.reduce((a,b) => a+b, 0); break;
-      case 'avg': r = vals.length ? vals.reduce((a,b) => a+b, 0) / vals.length : 0; break;
+      case 'sum': r = vals.reduce((a,b)=>a+b,0); break;
+      case 'avg': r = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0; break;
       case 'min': r = vals.length ? Math.min(...vals) : 0; break;
       case 'max': r = vals.length ? Math.max(...vals) : 0; break;
     }
     res.push({group:gn, value:r, count:objs.length});
   }
-  res.sort((a,b) => a.group.localeCompare(b.group, 'no'));
-  lastReport = {results:res, calc, measureParam:mp, groupParam:gp};
+  res.sort((a,b) => a.group.localeCompare(b.group,'no'));
+  return res;
+}
+
+function runReport() {
+  const gk = document.getElementById('reportGroupBy').value;
+  const mk = document.getElementById('reportMeasure').value;
+  const calc = document.getElementById('reportCalc').value;
+  const c = document.getElementById('reportResults');
+  const scenarioAId = document.getElementById('reportScenarioA')?.value || 'current';
+  const scenarioBId = document.getElementById('reportScenarioB')?.value || 'none';
+
+  if (!mk && calc !== 'count') { c.innerHTML = '<div class="empty-state"><div>Velg en måleparameter.</div></div>'; return; }
+  const mp = project.parameters.find(p => p.key === mk);
+  const gp = project.parameters.find(p => p.key === gk);
   const cl = {count:'Antall', sum:'Sum', avg:'Gjennomsnitt', min:'Min', max:'Maks'};
+
+  // Comparison mode
+  if (scenarioBId !== 'none') {
+    const objsA = getScenarioObjects(scenarioAId);
+    const objsB = getScenarioObjects(scenarioBId);
+    const resA = computeReportGroups(objsA, gk, mk, calc);
+    const resB = computeReportGroups(objsB, gk, mk, calc);
+    const snapA = scenarioAId === 'current' ? 'Nåværende' : ((project.snapshots||[]).find(s=>s.id===scenarioAId)?.name || scenarioAId);
+    const snapB = scenarioBId === 'current' ? 'Nåværende' : ((project.snapshots||[]).find(s=>s.id===scenarioBId)?.name || scenarioBId);
+    const mapA = Object.fromEntries(resA.map(r=>[r.group,r]));
+    const mapB = Object.fromEntries(resB.map(r=>[r.group,r]));
+    const allGroups = [...new Set([...resA.map(r=>r.group),...resB.map(r=>r.group)])].sort((a,b)=>a.localeCompare(b,'no'));
+    const vh = calc === 'count' ? 'Antall' : cl[calc] + ' – ' + (mp ? mp.label + (mp.unit?' ('+mp.unit+')':'') : '');
+    let h = `<table class="report-table"><thead><tr>
+      <th>${gp?esc(gp.label):'Gruppe'}</th>
+      <th>${esc(snapA)}</th>
+      <th>${esc(snapB)}</th>
+      <th>Δ abs</th>
+      <th>Δ %</th>
+    </tr></thead><tbody>`;
+    for (const g of allGroups) {
+      const ra = mapA[g], rb = mapB[g];
+      const va = ra ? ra.value : null;
+      const vb = rb ? rb.value : null;
+      const fa = va !== null ? formatNum(parseFloat(va.toFixed(4)), mp) : '—';
+      const fb = vb !== null ? formatNum(parseFloat(vb.toFixed(4)), mp) : '—';
+      let dAbs = '', dPct = '', dStyle = '';
+      if (va !== null && vb !== null) {
+        const diff = vb - va;
+        dAbs = (diff >= 0 ? '+' : '') + formatNum(parseFloat(diff.toFixed(4)), mp);
+        dPct = va !== 0 ? (diff/Math.abs(va)*100).toFixed(1)+'%' : '—';
+        if (diff > 0) { dAbs = `<span style="color:#008761">${esc(dAbs)}</span>`; dPct = `<span style="color:#008761">+${esc(dPct)}</span>`; }
+        else if (diff < 0) { dAbs = `<span style="color:var(--red)">${esc(dAbs)}</span>`; dPct = `<span style="color:var(--red)">${esc(dPct)}</span>`; }
+        else { dAbs = esc(dAbs); dPct = esc(dPct); }
+      } else { dAbs = '—'; dPct = '—'; }
+      h += `<tr><td>${esc(g)}</td><td>${esc(fa)}</td><td>${esc(fb)}</td><td>${dAbs}</td><td>${dPct}</td></tr>`;
+    }
+    h += '</tbody></table>';
+    lastReport = {results: resA, calc, measureParam:mp, groupParam:gp};
+    c.innerHTML = h;
+    return;
+  }
+
+  // Normal single-scenario mode
+  const objsA = getScenarioObjects(scenarioAId);
+  const res = computeReportGroups(objsA, gk, mk, calc);
+  lastReport = {results:res, calc, measureParam:mp, groupParam:gp};
   const vh = calc === 'count' ? 'Antall' : cl[calc] + ' – ' + (mp ? mp.label + (mp.unit?' ('+mp.unit+')':'') : '');
   let h = `<table class="report-table"><thead><tr><th>${gp?esc(gp.label):'Gruppe'}</th><th>${vh}</th>${calc!=='count'?'<th>Antall</th>':''}</tr></thead><tbody>`;
   for (const r of res) {
@@ -2259,8 +2343,7 @@ function runReport() {
     } else if (calc === 'sum') {
       totalVal = res.reduce((s, r) => s + r.value, 0);
     } else if (calc === 'avg') {
-      // Weighted average: recompute from raw objects
-      const rawVals = project.objects.map(o => {
+      const rawVals = objsA.map(o => {
         const p2 = project.parameters.find(pp => pp.key === mk);
         return p2?.type === 'formula' ? parseFloat(evalFormula(p2.expression, o)) : parseFloat(o.values[mk]);
       }).filter(v => !isNaN(v));
@@ -2303,7 +2386,7 @@ function exportReportCSV() {
     const v = typeof r.value === 'number' ? (Number.isInteger(r.value) ? r.value : r.value.toFixed(2)) : r.value;
     lines.push([csvE(r.group), v, r.count].join(sep));
   }
-  downloadFile(lines.join('\n'), 'rapport.csv', 'text/csv;charset=utf-8');
+  downloadFile(lines.join('\n'), exportFilename('csv'), 'text/csv;charset=utf-8');
   toast('Rapport eksportert.');
 }
 
@@ -2495,7 +2578,7 @@ function renderAggregationBar() {
   // row-actions cell
   h += '<td></td>';
   // Navn cell with label
-  h += '<td style="font-size:11px;color:var(--text-muted);">Σ</td>';
+  h += '<td style="font-size:11px;color:var(--text-muted);">Agg.</td>';
   for (const p of visParams) {
     if (p.type !== 'number' && p.type !== 'formula') { h += '<td></td>'; continue; }
     const agg = tableAggregation[p.key] || '';
@@ -2516,11 +2599,11 @@ function renderAggregationBar() {
     h += `<td>
       <select class="agg-tfoot-select" onchange="setAggregation('${p.key}',this.value)">
         <option value="" ${agg===''?'selected':''}>—</option>
-        <option value="sum" ${agg==='sum'?'selected':''}>Σ</option>
-        <option value="avg" ${agg==='avg'?'selected':''}>⌀</option>
-        <option value="count" ${agg==='count'?'selected':''}>N</option>
-        <option value="min" ${agg==='min'?'selected':''}>↓</option>
-        <option value="max" ${agg==='max'?'selected':''}>↑</option>
+        <option value="sum" ${agg==='sum'?'selected':''}>Sum</option>
+        <option value="avg" ${agg==='avg'?'selected':''}>Gjennomsnitt</option>
+        <option value="count" ${agg==='count'?'selected':''}>Antall</option>
+        <option value="min" ${agg==='min'?'selected':''}>Minst</option>
+        <option value="max" ${agg==='max'?'selected':''}>Størst</option>
       </select>
       ${agg && dispVal !== '' ? `<div class="agg-tfoot-val">${esc(dispVal)}</div>` : ''}
     </td>`;
@@ -2560,6 +2643,7 @@ function buildSnapshotsModalBody() {
           <div class="snapshot-name">${esc(s.name)}</div>
           <div class="snapshot-ts">${ts}</div>
         </div>
+        <button class="btn btn-ghost btn-sm" onclick="renameSnapshot('${s.id}')" title="Gi nytt navn">✏</button>
         <button class="btn btn-secondary btn-sm" onclick="restoreSnapshot('${s.id}')">Gjenopprett</button>
         <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteSnapshot('${s.id}')">Slett</button>
       </div>`;
@@ -2610,12 +2694,56 @@ function deleteSnapshot(id) {
   toast(`Snapshot «${s.name}» slettet.`);
 }
 
+function renameSnapshot(id) {
+  const s = (project.snapshots||[]).find(ss=>ss.id===id); if(!s) return;
+  const n = prompt('Nytt navn for snapshot:', s.name);
+  if (n && n.trim()) { s.name = n.trim(); autoSave(); openSnapshotsModal(); }
+}
+
 /* ============================================================
    ACTIONS VIEW
    ============================================================ */
+let actionFilters = [];
+
+function renderActionFilterList() {
+  const container = document.getElementById('actionFilterList');
+  if (!container) return;
+  const allParams = project.parameters.filter(p => p.type !== 'formula');
+  const paramOpts = '<option value="">— Parameter —</option>' +
+    allParams.map(p => `<option value="${p.key}">${esc(p.label)}</option>`).join('');
+  const opOpts = `<option value="=">=</option><option value="≠">≠</option><option value=">">&gt;</option><option value="<">&lt;</option><option value="≥">≥</option><option value="≤">≤</option><option value="inneholder">inneholder</option>`;
+  if (!actionFilters.length) { container.innerHTML = ''; return; }
+  container.innerHTML = actionFilters.map((f, i) => `
+    <div style="display:flex;gap:4px;margin-bottom:4px;align-items:center;">
+      <select style="flex:1.3;" onchange="setActionFilter(${i},'paramKey',this.value)">${
+        allParams.map(p => `<option value="${p.key}" ${p.key===f.paramKey?'selected':''}>${esc(p.label)}</option>`).join('')
+      }<option value="" ${f.paramKey===''?'selected':''}>— Parameter —</option></select>
+      <select style="flex:0.9;" onchange="setActionFilter(${i},'op',this.value)">
+        ${['=','≠','>','<','≥','≤','inneholder'].map(o=>`<option value="${o}" ${f.op===o?'selected':''}>${o}</option>`).join('')}
+      </select>
+      <input type="text" style="flex:1;" value="${esc(f.value)}" placeholder="Verdi…" oninput="setActionFilter(${i},'value',this.value)">
+      <button class="btn btn-ghost btn-sm" onclick="removeActionFilter(${i})" style="color:var(--red);padding:4px 6px;">×</button>
+    </div>`).join('');
+}
+
+function addActionFilter() {
+  actionFilters.push({paramKey:'', op:'=', value:''});
+  renderActionFilterList();
+  updateActionPreview();
+}
+
+function removeActionFilter(index) {
+  actionFilters.splice(index, 1);
+  renderActionFilterList();
+  updateActionPreview();
+}
+
+function setActionFilter(index, field, value) {
+  if (actionFilters[index]) { actionFilters[index][field] = value; updateActionPreview(); }
+}
+
 function initActionsView() {
   const numParams = project.parameters.filter(p => p.type === 'number' || p.type === 'formula');
-  const allParams = project.parameters;
 
   const targetSel = document.getElementById('actionTargetParam');
   if (targetSel) {
@@ -2623,44 +2751,39 @@ function initActionsView() {
       numParams.map(p => `<option value="${p.key}">${esc(p.label)}</option>`).join('');
   }
 
-  const filterSel = document.getElementById('actionFilterParam');
-  if (filterSel) {
-    filterSel.innerHTML = '<option value="">Ingen filter</option>' +
-      allParams.filter(p => p.type !== 'formula').map(p => `<option value="${p.key}">${esc(p.label)}</option>`).join('');
-  }
-
+  renderActionFilterList();
   updateActionPreview();
+}
+
+function applyActionFilterCondition(obj, f) {
+  if (!f.paramKey || f.value === '') return true;
+  const val = obj.values[f.paramKey];
+  const strVal = String(val ?? '');
+  const numVal = parseFloat(val);
+  const numFilter = parseFloat(f.value);
+  switch(f.op) {
+    case '=': return strVal === f.value;
+    case '≠': return strVal !== f.value;
+    case '>': return !isNaN(numVal) && !isNaN(numFilter) && numVal > numFilter;
+    case '<': return !isNaN(numVal) && !isNaN(numFilter) && numVal < numFilter;
+    case '≥': return !isNaN(numVal) && !isNaN(numFilter) && numVal >= numFilter;
+    case '≤': return !isNaN(numVal) && !isNaN(numFilter) && numVal <= numFilter;
+    case 'inneholder': return strVal.toLowerCase().includes(f.value.toLowerCase());
+    default: return true;
+  }
 }
 
 function getActionAffectedObjects() {
   const targetKey = document.getElementById('actionTargetParam')?.value;
-  const filterKey = document.getElementById('actionFilterParam')?.value;
-  const filterOp = document.getElementById('actionFilterOp')?.value;
-  const filterVal = document.getElementById('actionFilterValue')?.value;
-  const actionType = document.getElementById('actionType')?.value;
-  const amount = parseFloat(document.getElementById('actionAmount')?.value);
-  const rounding = parseInt(document.getElementById('actionRounding')?.value) || 0;
 
   if (!targetKey) return [];
   const targetParam = project.parameters.find(p => p.key === targetKey);
   if (!targetParam || targetParam.type === 'formula') return [];
 
+  const activeFilters = actionFilters.filter(f => f.paramKey && f.value !== '');
+
   return project.objects.filter(obj => {
-    if (!filterKey || !filterVal) return true;
-    const val = obj.values[filterKey];
-    const strVal = String(val ?? '');
-    const numVal = parseFloat(val);
-    const numFilter = parseFloat(filterVal);
-    switch(filterOp) {
-      case '=': return strVal === filterVal;
-      case '≠': return strVal !== filterVal;
-      case '>': return !isNaN(numVal) && !isNaN(numFilter) && numVal > numFilter;
-      case '<': return !isNaN(numVal) && !isNaN(numFilter) && numVal < numFilter;
-      case '≥': return !isNaN(numVal) && !isNaN(numFilter) && numVal >= numFilter;
-      case '≤': return !isNaN(numVal) && !isNaN(numFilter) && numVal <= numFilter;
-      case 'inneholder': return strVal.toLowerCase().includes(filterVal.toLowerCase());
-      default: return true;
-    }
+    return activeFilters.every(f => applyActionFilterCondition(obj, f));
   });
 }
 
@@ -2727,8 +2850,56 @@ function updateActionPreview() {
       </tbody></table>`;
   }
 
+  // KPI simulation (Feature 2)
+  let kpiHtml = '';
+  if (project.kpi && project.kpi.paramKey && affected.length > 0 && !isNaN(amount)) {
+    const kpiKey = project.kpi.paramKey;
+    const kpiParam = project.parameters.find(p => p.key === kpiKey);
+    const kpiCurrentVal = computeKpiValue();
+    if (kpiCurrentVal !== null && kpiParam) {
+      // Build simulated objects: deep clone, apply action to affected objects for targetKey
+      // If targetKey === kpiKey or kpiParam is formula that depends on targetKey, simulate
+      const simObjects = JSON.parse(JSON.stringify(project.objects));
+      const affectedIds = new Set(affected.map(o => o.id));
+      for (const simObj of simObjects) {
+        if (!affectedIds.has(simObj.id)) continue;
+        const oldV = simObj.values[targetKey];
+        simObj.values[targetKey] = computeNewValue(oldV, actionType, amount, rounding);
+      }
+      // Compute KPI on simulated dataset
+      const simVals = simObjects.map(o => {
+        const v = kpiParam.type === 'formula' ? parseFloat(evalFormula(kpiParam.expression, o)) : parseFloat(o.values[kpiKey]);
+        return isNaN(v) ? null : v;
+      }).filter(v => v !== null);
+      let simKpi = null;
+      if (simVals.length) {
+        switch(project.kpi.func) {
+          case 'sum': simKpi = simVals.reduce((a,b)=>a+b,0); break;
+          case 'avg': simKpi = simVals.reduce((a,b)=>a+b,0)/simVals.length; break;
+          case 'count': simKpi = simObjects.length; break;
+          case 'min': simKpi = Math.min(...simVals); break;
+          case 'max': simKpi = Math.max(...simVals); break;
+        }
+      }
+      if (simKpi !== null) {
+        const kpiLabel = project.kpi.label || kpiParam.label;
+        const curDisp = formatNum(parseFloat(kpiCurrentVal.toFixed(4)), kpiParam) + (kpiParam.unit ? ' ' + kpiParam.unit : '');
+        const simDisp = formatNum(parseFloat(simKpi.toFixed(4)), kpiParam) + (kpiParam.unit ? ' ' + kpiParam.unit : '');
+        const delta = simKpi - kpiCurrentVal;
+        const deltaDisp = (delta >= 0 ? '+' : '') + formatNum(parseFloat(delta.toFixed(4)), kpiParam) + (kpiParam.unit ? ' ' + kpiParam.unit : '');
+        const deltaColor = delta > 0 ? 'color:#008761' : delta < 0 ? 'color:var(--red)' : 'color:var(--text-muted)';
+        kpiHtml = `<div style="background:var(--bg-blue);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;font-size:13px;">
+          <strong>KPI-påvirkning:</strong><br>
+          ${esc(kpiLabel)}: ${esc(curDisp)} → <strong>${esc(simDisp)}</strong>
+          <span style="${deltaColor};margin-left:8px;">(${esc(deltaDisp)})</span>
+        </div>`;
+      }
+    }
+  }
+
   previewEl.innerHTML = `
     <div class="action-preview-count"><strong>${affected.length}</strong> av <strong>${total}</strong> objekter vil bli påvirket</div>
+    ${kpiHtml}
     ${exHtml}
     ${tableHtml || '<div style="color:var(--text-muted);font-size:13px;">Ingen objekter matcher filteret.</div>'}
   `;
@@ -2754,6 +2925,108 @@ function applyAction() {
   autoSave(); renderTable(); renderOverlays();
   toast(`Aksjon utført på ${affected.length} objekter.`);
   updateActionPreview();
+}
+
+/* ============================================================
+   HELP / BRUKSANVISNING
+   ============================================================ */
+function openHelp() {
+  const bd = document.createElement('div');
+  bd.className = 'modal-backdrop';
+  bd.id = 'helpModalBackdrop';
+  bd.onclick = e => { if (e.target === bd) bd.remove(); };
+  bd.innerHTML = `<div style="background:var(--bg-white);border-radius:var(--radius-xl);box-shadow:var(--shadow-lg);max-width:760px;width:94%;max-height:88vh;display:flex;flex-direction:column;animation:slideUp 0.2s ease;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-light);flex-shrink:0;">
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);">Bruksanvisning – Prisorama</h2>
+      <button class="btn-icon" onclick="document.getElementById('helpModalBackdrop').remove()"><span class="ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="15" y2="15"/><line x1="15" y1="5" x2="5" y2="15"/></svg></span></button>
+    </div>
+    <div style="overflow-y:auto;padding:24px 28px;font-size:13px;line-height:1.7;">
+
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Kom i gang</h2>
+      <p>Prisorama er en lokal HTML-app – <strong>ingen installasjon, ingen server, ingen database</strong>. Åpne <code>index.html</code> i en nettleser. Data lagres automatisk i nettleseren (localStorage) og kan eksporteres/importeres som JSON.</p>
+      <p style="margin-top:8px;"><strong>Første steg:</strong></p>
+      <ol style="margin-left:20px;margin-top:4px;">
+        <li>Klikk <strong>«Parametere»</strong> i Tabell-fanen for å definere kolonner (egenskaper).</li>
+        <li>Klikk <strong>«Legg til objekt»</strong> for å registrere rader.</li>
+        <li>Gå til <strong>Grafisk</strong>-fanen, last inn et bakgrunnsbilde og plasser objektene.</li>
+      </ol>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Parametere</h2>
+      <p>Parametere er kolonnene i tabellen. <strong>Typer:</strong></p>
+      <ul style="margin-left:20px;margin-top:4px;">
+        <li><strong>Tekst:</strong> fritekst</li>
+        <li><strong>Tall:</strong> numerisk. Aktiver <strong>«Tusenskille»</strong> for lesbare beløp (f.eks. 1 250 000).</li>
+        <li><strong>Valgliste:</strong> forhåndsdefinerte valg. Støtter fargekoding i grafisk visning.</li>
+        <li><strong>Formel:</strong> beregnet felt, f.eks. <code>pris / areal</code>. Bruk parameternøkler (vises i dialogen).</li>
+        <li><strong>Ja/Nei:</strong> avkrysningsboks.</li>
+      </ul>
+      <p style="margin-top:6px;"><strong>Rekkefølge:</strong> dra kolonneoverskriftene i tabellen for å endre rekkefølge.</p>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Tabell</h2>
+      <ul style="margin-left:20px;">
+        <li>Søk på navn (søkeboks øverst til høyre).</li>
+        <li><strong>Filtrer kolonner:</strong> klikk «Filter»-knappen for per-kolonne filtrering.</li>
+        <li><strong>Tabellvisninger:</strong> lagre ulike kolonnekombinasjoner og bytt raskt mellom dem.</li>
+        <li><strong>Aggregeringsrad:</strong> velg Sum/Gjennomsnitt/Antall/Minst/Størst per tallkolonne.</li>
+        <li><strong>CSV-import:</strong> importer data fra Excel/CSV og koble kolonner til parametere.</li>
+      </ul>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Grafisk visning</h2>
+      <p>Last inn et bakgrunnsbilde (plantegning, kart o.l.) via sidepanelet. Objekter plasseres som drabare kort på bildet. Dobbeltklikk for å redigere.</p>
+      <p style="margin-top:6px;"><strong>Viktig om bilder:</strong> aktiver <strong>«Bygg inn bilde»</strong> i sidepanelet for at bildet lagres i prosjektfilen (JSON-eksport). Uten dette må bildet lastes inn på nytt hver gang. Store bilder (&gt;4 MB) lagres ikke i nettleseren, men inkluderes i JSON-eksporten.</p>
+      <ul style="margin-left:20px;margin-top:6px;">
+        <li><strong>Shift+klikk:</strong> velg flere objekter. Bulk-panelet gir felles handlinger.</li>
+        <li><strong>Heatmap:</strong> fargelegg objekter basert på en tallparameter.</li>
+        <li><strong>Farge etter kategori:</strong> fargelegg basert på en valgliste-parameter (24-fargers palett).</li>
+        <li><strong>Bildeskala:</strong> juster bildets skala uavhengig av zoom. Lås skalaen med låseknappen.</li>
+        <li>Gjennomsiktighet og tekststørrelse: felles justeringer via slidere i sidepanelet.</li>
+      </ul>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Rapport</h2>
+      <p>Grupper data og beregn sum/snitt/antall/min/maks. Resultatene vises som tabell med totallinje og som søylediagram (opptil 30 grupper).</p>
+      <p style="margin-top:6px;"><strong>Scenariesammenligning:</strong> sammenlign nåværende data med et lagret snapshot, eller to snapshots mot hverandre. Velg i nedtrekksmenyene over rapporten. Tabellen viser Δ abs og Δ % mellom scenariene, med grønn/rød fargekoding.</p>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Aksjoner</h2>
+      <p>Juster tallverdier i bulk med full kontroll:</p>
+      <ol style="margin-left:20px;margin-top:4px;">
+        <li>Velg <strong>målparameter</strong> (tallkolonne).</li>
+        <li>Legg til ett eller flere <strong>filtre</strong> (AND-logikk) for å begrense hvilke rader som påvirkes.</li>
+        <li>Velg <strong>operasjon</strong>: legg til/trekk fra beløp eller prosent, multipliser, sett til verdi.</li>
+        <li>Velg eventuell <strong>avrunding</strong> (f.eks. nærmeste 10 000).</li>
+      </ol>
+      <p style="margin-top:6px;">Forhåndsvisningen viser alle berørte rader og simulert KPI-påvirkning.</p>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Nøkkeltall (KPI)</h2>
+      <p>Dobbeltklikk på KPI-feltet i topmenyen for å velge hvilket nøkkeltall som alltid vises. Velg parameter, beregningsfunksjon og valgfri etikett.</p>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Snapshots</h2>
+      <p>Lagre navngitte versjoner av innholdet (objekter og plasseringer). Klikk <strong>«Snapshots»</strong> i topmenyen, gi snapshotet et navn og klikk «Lagre snapshot». Gjenopprett ved å klikke «Gjenopprett» – nåværende tilstand legges på angre-stakken. Bruk i rapport for scenariesammenligning. Klikk ✏ for å gi et snapshot nytt navn.</p>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Lagring og eksport</h2>
+      <ul style="margin-left:20px;">
+        <li><strong>Auto-lagring</strong> til localStorage skjer automatisk etter hver endring.</li>
+        <li><strong>JSON-eksport:</strong> eksporterer hele prosjektet inkl. snapshots. Filnavn: <code>prisorama_[navn]_[dato]_[tid].json</code></li>
+        <li><strong>CSV-eksport:</strong> eksporterer tabelldata. Filnavn: <code>prisorama_[navn]_[dato]_[tid].csv</code></li>
+        <li>Importer JSON for å gjenopprette et prosjekt på en annen PC/nettleser.</li>
+      </ul>
+
+      <div style="height:1px;background:var(--border-light);margin:18px 0;"></div>
+      <h2 style="font-size:16px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Hurtigtaster</h2>
+      <ul style="margin-left:20px;">
+        <li><strong>Ctrl+Z:</strong> Angre</li>
+        <li><strong>Ctrl+Y / Ctrl+Shift+Z:</strong> Gjør om</li>
+      </ul>
+    </div>
+  </div>`;
+  document.body.appendChild(bd);
 }
 
 /* ============================================================
