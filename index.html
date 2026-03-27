@@ -662,7 +662,21 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 4px; paddi
             </select>
           </div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Variabler gjelder globalt – filter er ikke tilgjengelig. Forhåndsvisningen simulerer effekten uten å lagre endringen.</div>
+          <h3>Operasjon</h3>
+          <div class="form-group">
+            <select id="varActionType" onchange="updateActionPreview()">
+              <option value="add">Øk med fast beløp</option>
+              <option value="subtract">Reduser med fast beløp</option>
+              <option value="add_pct">Øk med prosent</option>
+              <option value="subtract_pct">Reduser med prosent</option>
+              <option value="set">Sett til verdi</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <input type="number" step="any" id="varActionAmount" placeholder="Beløp/verdi..." oninput="updateActionPreview()">
+          </div>
         </div>
+        <div id="actionParamOperationSection">
         <h3>Operasjon</h3>
         <div class="form-group">
           <select id="actionType" onchange="updateActionPreview()">
@@ -689,6 +703,7 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 4px; paddi
             <option value="100000">Nærmeste 100 000</option>
             <option value="1000000">Nærmeste 1 000 000</option>
           </select>
+        </div>
         </div>
         <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="applyAction()">Utfør aksjon</button>
       </div>
@@ -2919,6 +2934,7 @@ function onActionTargetTypeChange() {
   const type = document.querySelector('input[name="actionTargetType"]:checked')?.value || 'parameter';
   document.getElementById('actionTargetParamSection').style.display = type === 'parameter' ? '' : 'none';
   document.getElementById('actionVariableSection').style.display = type === 'variable' ? '' : 'none';
+  document.getElementById('actionParamOperationSection').style.display = type === 'parameter' ? '' : 'none';
   updateActionPreview();
 }
 
@@ -2978,9 +2994,10 @@ function fmtNum(v) {
 
 function updateActionPreview() {
   const targetType = document.querySelector('input[name="actionTargetType"]:checked')?.value || 'parameter';
-  const actionType = document.getElementById('actionType')?.value;
-  const amount = parseFloat(document.getElementById('actionAmount')?.value);
-  const rounding = parseInt(document.getElementById('actionRounding')?.value) || 0;
+  const isVarMode = targetType === 'variable';
+  const actionType = isVarMode ? (document.getElementById('varActionType')?.value || 'add') : document.getElementById('actionType')?.value;
+  const amount = isVarMode ? parseFloat(document.getElementById('varActionAmount')?.value) : parseFloat(document.getElementById('actionAmount')?.value);
+  const rounding = isVarMode ? 0 : (parseInt(document.getElementById('actionRounding')?.value) || 0);
   const previewEl = document.getElementById('actionPreviewContent');
   if (!previewEl) return;
 
@@ -3154,19 +3171,20 @@ function updateActionPreview() {
 
 function applyAction() {
   const targetType = document.querySelector('input[name="actionTargetType"]:checked')?.value || 'parameter';
-  const actionType = document.getElementById('actionType')?.value;
-  const amount = parseFloat(document.getElementById('actionAmount')?.value);
-  const rounding = parseInt(document.getElementById('actionRounding')?.value) || 0;
+  const isVarMode = targetType === 'variable';
+  const actionType = isVarMode ? (document.getElementById('varActionType')?.value || 'add') : document.getElementById('actionType')?.value;
+  const amount = isVarMode ? parseFloat(document.getElementById('varActionAmount')?.value) : parseFloat(document.getElementById('actionAmount')?.value);
+  const rounding = isVarMode ? 0 : (parseInt(document.getElementById('actionRounding')?.value) || 0);
 
   if (isNaN(amount)) { toast('Skriv inn et beløp/verdi.', 'warning'); return; }
 
-  if (targetType === 'variable') {
+  if (isVarMode) {
     const varId = document.getElementById('actionTargetVariable')?.value;
     if (!varId) { toast('Velg en målvariabel.', 'warning'); return; }
     const v = (project.variables||[]).find(vv=>vv.id===varId);
     if (!v) { toast('Variabel ikke funnet.', 'error'); return; }
     pushHistory();
-    v.value = computeNewValue(parseFloat(v.value), actionType, amount, rounding);
+    v.value = computeNewValue(parseFloat(v.value), actionType, amount, 0);
     autoSave(); renderTable(); renderOverlays(); renderKpi();
     toast(`Variabel «${v.label}» oppdatert til ${v.value}.`);
     updateActionPreview();
